@@ -1,0 +1,16 @@
+export const CSS_FILTERS: Record<string, string> = {
+  normal: 'none',
+  grayscale: 'grayscale(100%)',
+  sepia: 'sepia(80%) contrast(110%)',
+  vintage: 'sepia(60%) contrast(80%) brightness(90%) saturate(60%)',
+  warm: 'sepia(30%) saturate(130%) hue-rotate(-10deg) brightness(105%)',
+  cool: 'saturate(110%) hue-rotate(20deg) brightness(105%)',
+  brightness: 'brightness(130%)',
+  contrast: 'contrast(150%)',
+  saturation: 'saturate(180%)',
+  noir: 'grayscale(100%) contrast(140%) brightness(90%)',
+  fade: 'saturate(60%) contrast(85%) brightness(110%)',
+  dreamy: 'blur(1px) saturate(70%) brightness(115%) contrast(90%)',
+  dramatic: 'contrast(160%) saturate(130%) brightness(85%)',
+  neon: 'saturate(200%) contrast(120%) hue-rotate(5deg)',
+};
