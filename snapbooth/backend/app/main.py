@@ -17,6 +17,7 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
+logger = logging.getLogger("snapbooth")
 
 
 @asynccontextmanager
@@ -59,20 +60,36 @@ def health_check():
 
 
 # Serve built frontend in production
-FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
-if os.path.isdir(FRONTEND_DIR):
+# Try multiple paths in case the working directory differs from __file__-relative
+_candidates = [
+    os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist"),
+    os.path.join(os.getcwd(), "..", "frontend", "dist"),
+    os.path.join(os.getcwd(), "frontend", "dist"),
+]
+FRONTEND_DIR = None
+for _p in _candidates:
+    _resolved = os.path.abspath(_p)
+    if os.path.isdir(_resolved):
+        FRONTEND_DIR = _resolved
+        break
+
+if FRONTEND_DIR:
     _assets_dir = os.path.join(FRONTEND_DIR, "assets")
     if os.path.isdir(_assets_dir):
         app.mount("/assets", StaticFiles(directory=_assets_dir), name="frontend_assets")
+    logger.info("Serving frontend from %s", FRONTEND_DIR)
+else:
+    logger.warning("Frontend dist not found. SPA routes will not be served.")
 
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        if full_path.startswith("api") or full_path.startswith("uploads"):
-            raise HTTPException(status_code=404)
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    if full_path.startswith("api") or full_path.startswith("uploads"):
+        raise HTTPException(status_code=404)
+    if FRONTEND_DIR:
         index_path = os.path.join(FRONTEND_DIR, "index.html")
         if os.path.isfile(index_path):
             return FileResponse(index_path, media_type="text/html")
-        raise HTTPException(status_code=404)
+    raise HTTPException(status_code=404)
 
 
 if __name__ == "__main__":
