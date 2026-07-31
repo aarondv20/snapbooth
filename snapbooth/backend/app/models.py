@@ -34,6 +34,8 @@ class PhotoSession(Base):
     status = Column(String, default="waiting")  # waiting, complete, expired
     composite_filename = Column(String, nullable=True)
     participants_data = Column(JSON, default=list)  # list of {slot, filename, thumb_filename}
+    creator_id = Column(String, nullable=True)  # anonymous device ID of session creator
+    participant_ids = Column(JSON, default=list, nullable=True)  # anonymous device IDs, index-aligned with participants_data
 
 
 class CapturedImage(Base):
@@ -56,4 +58,5 @@ class CapturedImage(Base):
     layout = Column(String, default="single")
     custom_text = Column(Text, nullable=True)
     stickers_data = Column(JSON, nullable=True)
+    owner_ids = Column(JSON, default=list, nullable=True)  # anonymous device IDs with access to this photo
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

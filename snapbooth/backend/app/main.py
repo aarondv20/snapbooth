@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from fastapi import HTTPException
 
 from app.config import settings
-from app.database import engine, Base
+from app.database import engine, Base, ensure_schema
 from app.routers import capture, gallery, filters, session
 
 logging.basicConfig(
@@ -24,6 +24,7 @@ logger = logging.getLogger("snapbooth")
 async def lifespan(app: FastAPI):
     """Create database tables on startup and clean up on shutdown."""
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
     yield
 
 

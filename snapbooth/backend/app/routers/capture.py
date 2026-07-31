@@ -2,7 +2,7 @@ import os
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -14,13 +14,13 @@ logger = logging.getLogger("snapbooth.capture")
 from app.schemas import CaptureRequest, CaptureResponse, CompositeResponse, CompositeCaptureRequest
 from app.services.image_processor import process_and_save, process_and_save_composite, create_session_composite, _decode_base64_to_pil
 from app.config import settings
+from app.utils.helpers import get_anonymous_id
 
 router = APIRouter(prefix="/api/capture", tags=["capture"])
 
 
-@router.post("/", response_model=CaptureResponse, status_code=status.HTTP_201_CREATED)
-def capture_image(req: CaptureRequest, db: Session = Depends(get_db)):
-    """Capture a single photo: decode base64, apply filter, save to disk, store metadata."""
+def _save_capture(req: CaptureRequest, db: Session, owner_id) -> CaptureResponse:
+    """Internal capture logic shared by /capture/ and /capture/batch."""
     session_id = req.session_id
     logger.info(f"[Capture] Received capture request, session_id={session_id}, layout={req.layout}, filter={req.filter}")
 
@@ -66,6 +66,7 @@ def capture_image(req: CaptureRequest, db: Session = Depends(get_db)):
         file_size=file_size,
         custom_text=req.custom_text,
         stickers_data=req.stickers_data,
+        owner_ids=[owner_id] if owner_id else [],
         created_at=datetime.now(timezone.utc),
     )
     db.add(image)
@@ -86,8 +87,14 @@ def capture_image(req: CaptureRequest, db: Session = Depends(get_db)):
     )
 
 
+@router.post("/", response_model=CaptureResponse, status_code=status.HTTP_201_CREATED)
+def capture_image(req: CaptureRequest, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
+    """Capture a single photo: decode base64, apply filter, save to disk, store metadata."""
+    return _save_capture(req, db, owner_id)
+
+
 @router.post("/composite", response_model=CaptureResponse, status_code=status.HTTP_201_CREATED)
-def capture_composite(req: CompositeCaptureRequest, db: Session = Depends(get_db)):
+def capture_composite(req: CompositeCaptureRequest, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Capture multiple images and save as a single layout composite."""
     logger.info(f"[Capture] Composite request: {len(req.images)} images, layout={req.layout}, filter={req.filter}")
 
@@ -118,6 +125,7 @@ def capture_composite(req: CompositeCaptureRequest, db: Session = Depends(get_db
         height=height,
         file_size=file_size,
         layout=req.layout,
+        owner_ids=[owner_id] if owner_id else [],
         created_at=datetime.now(timezone.utc),
     )
     db.add(image)
@@ -137,11 +145,11 @@ def capture_composite(req: CompositeCaptureRequest, db: Session = Depends(get_db
 
 
 @router.post("/batch", response_model=List[CaptureResponse], status_code=status.HTTP_201_CREATED)
-def batch_capture(requests: List[CaptureRequest], db: Session = Depends(get_db)):
+def batch_capture(requests: List[CaptureRequest], db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Capture multiple images in a single batch (used for layout captures)."""
     responses = []
     for req in requests:
-        resp = capture_image(req, db)
+        resp = _save_capture(req, db, owner_id)
         responses.append(resp)
     return responses
 

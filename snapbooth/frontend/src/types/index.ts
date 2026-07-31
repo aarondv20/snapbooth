@@ -12,6 +12,7 @@ export interface CapturedImage {
   width: number | null;
   height: number | null;
   file_size: number | null;
+  owner_ids: string[] | null;
   created_at: string;
 }
 

@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, cast, String
 
 from app.database import get_db
 from app.models import CapturedImage, PhotoSession
@@ -16,7 +16,7 @@ from app.models import CapturedImage, PhotoSession
 logger = logging.getLogger("snapbooth.gallery")
 from app.schemas import ImageResponse, GalleryResponse, ImageUpdateRequest, ExportRequest
 from app.config import settings
-from app.utils.helpers import delete_file
+from app.utils.helpers import delete_file, get_anonymous_id
 from app.services.image_processor import export_images_to_pdf
 from app.services.qr_service import generate_qr_code
 
@@ -39,8 +39,23 @@ def _image_to_response(img: CapturedImage) -> ImageResponse:
         width=img.width,
         height=img.height,
         file_size=img.file_size,
+        owner_ids=img.owner_ids or [],
         created_at=img.created_at,
     )
+
+
+def _require_owner(img: CapturedImage, owner_id: Optional[str]) -> None:
+    """Raise 404 if the requester is not an owner of the image (or image has no owners)."""
+    if not owner_id or not img.owner_ids or owner_id not in img.owner_ids:
+        raise HTTPException(status_code=404, detail="Image not found")
+
+
+def _owned_query(db: Session, owner_id: Optional[str]):
+    """Base gallery query scoped to the requester's anonymous ID."""
+    query = db.query(CapturedImage).filter(CapturedImage.is_archived == False)
+    if not owner_id:
+        return query.filter(CapturedImage.id == None)  # no owner -> nothing
+    return query.filter(cast(CapturedImage.owner_ids, String).contains(f'"{owner_id}"'))
 
 
 @router.get("/", response_model=GalleryResponse)
@@ -51,9 +66,13 @@ def list_images(
     sort: str = "newest",
     favourites_only: bool = False,
     db: Session = Depends(get_db),
+    owner_id: Optional[str] = Depends(get_anonymous_id),
 ):
-    """List captured images with pagination, search, sorting, and favourite filtering."""
-    query = db.query(CapturedImage).filter(CapturedImage.is_archived == False)
+    """List captured images with pagination, search, sorting, and favourite filtering.
+
+    Only images owned by the requesting anonymous user are returned.
+    """
+    query = _owned_query(db, owner_id)
 
     if search:
         query = query.filter(CapturedImage.custom_text.ilike(f"%{search}%"))
@@ -81,20 +100,22 @@ def list_images(
 
 
 @router.get("/{image_id}", response_model=ImageResponse)
-def get_image(image_id: str, db: Session = Depends(get_db)):
+def get_image(image_id: str, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Get metadata for a single image."""
     img = db.query(CapturedImage).filter(CapturedImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image not found")
+    _require_owner(img, owner_id)
     return _image_to_response(img)
 
 
 @router.patch("/{image_id}", response_model=ImageResponse)
-def update_image(image_id: str, req: ImageUpdateRequest, db: Session = Depends(get_db)):
+def update_image(image_id: str, req: ImageUpdateRequest, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Update image metadata (favourite, custom text, filter)."""
     img = db.query(CapturedImage).filter(CapturedImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image not found")
+    _require_owner(img, owner_id)
 
     if req.is_favourite is not None:
         img.is_favourite = req.is_favourite
@@ -109,11 +130,12 @@ def update_image(image_id: str, req: ImageUpdateRequest, db: Session = Depends(g
 
 
 @router.delete("/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_image(image_id: str, db: Session = Depends(get_db)):
+def delete_image(image_id: str, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Delete an image and its files from disk."""
     img = db.query(CapturedImage).filter(CapturedImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image not found")
+    _require_owner(img, owner_id)
 
     # Remove physical files
     delete_file(os.path.join(settings.UPLOAD_DIR, img.filename))
@@ -127,9 +149,10 @@ def delete_image(image_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/export")
-def export_images(req: ExportRequest, db: Session = Depends(get_db)):
+def export_images(req: ExportRequest, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Export selected images in the requested format (png, jpeg, pdf, zip)."""
     images = db.query(CapturedImage).filter(CapturedImage.id.in_(req.image_ids)).all()
+    images = [img for img in images if owner_id and img.owner_ids and owner_id in img.owner_ids]
     if not images:
         raise HTTPException(status_code=404, detail="No images found")
 
@@ -157,11 +180,12 @@ def export_images(req: ExportRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/{image_id}/download")
-def download_image(image_id: str, fmt: str = Query("jpg"), db: Session = Depends(get_db)):
+def download_image(image_id: str, fmt: str = Query("jpg"), db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Download a single image in the specified format."""
     img = db.query(CapturedImage).filter(CapturedImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image not found")
+    _require_owner(img, owner_id)
 
     filepath = os.path.join(settings.UPLOAD_DIR, img.filename)
     if not os.path.exists(filepath):
@@ -172,11 +196,12 @@ def download_image(image_id: str, fmt: str = Query("jpg"), db: Session = Depends
 
 
 @router.get("/{image_id}/qr")
-def get_sharing_qr(image_id: str, db: Session = Depends(get_db)):
+def get_sharing_qr(image_id: str, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Generate a QR code that links to the image for sharing."""
     img = db.query(CapturedImage).filter(CapturedImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image not found")
+    _require_owner(img, owner_id)
 
     share_url = f"/gallery/{img.id}"
     qr_data_uri = generate_qr_code(share_url)

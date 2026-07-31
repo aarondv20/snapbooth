@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SnapBooth local state
+snapbooth.db
+*.tsbuildinfo
+snapbooth/backend/uploads/
+snapbooth/backend/error.log
+

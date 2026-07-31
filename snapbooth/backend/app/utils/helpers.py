@@ -1,7 +1,16 @@
 import os
 import uuid
 from typing import Optional
-from fastapi import UploadFile
+from fastapi import Header, UploadFile
+
+
+def get_anonymous_id(
+    x_anonymous_id: Optional[str] = Header(None, alias="X-Anonymous-ID"),
+) -> Optional[str]:
+    """Extract the persistent anonymous device ID sent by the frontend."""
+    if not x_anonymous_id or len(x_anonymous_id) > 128:
+        return None
+    return x_anonymous_id
 
 
 def save_upload_file(upload_dir: str, file: UploadFile, subdir: str = "") -> str:

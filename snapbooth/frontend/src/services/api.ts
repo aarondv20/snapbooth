@@ -7,11 +7,17 @@ import type {
   ExportFormat,
   Sticker,
 } from '../types';
+import { getAnonymousId } from '../utils/anonymousId';
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' },
+});
+
+api.interceptors.request.use((config) => {
+  config.headers['X-Anonymous-ID'] = getAnonymousId();
+  return config;
 });
 
 api.interceptors.response.use(

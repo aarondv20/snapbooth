@@ -2,6 +2,7 @@ import os
 import uuid
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -17,6 +18,7 @@ from app.schemas import (
 from PIL import Image as PILImage
 from app.services.image_processor import _decode_base64_to_pil, apply_filter, apply_frame_effect, create_thumbnail, create_layout_image, create_session_composite
 from app.config import settings
+from app.utils.helpers import get_anonymous_id
 
 logger = logging.getLogger("snapbooth.session")
 
@@ -34,6 +36,11 @@ def _is_expired(session: PhotoSession) -> bool:
 def _get_participants(session: PhotoSession) -> list:
     """Return participant list from session's JSON field."""
     return session.participants_data or []
+
+
+def _get_participant_ids(session: PhotoSession) -> list:
+    """Return anonymous device IDs of participants, index-aligned with participants_data."""
+    return session.participant_ids or []
 
 
 def _save_participant_image(image_data: str, filter_name: str) -> dict:
@@ -67,7 +74,7 @@ def _save_participant_image(image_data: str, filter_name: str) -> dict:
 
 
 def _finalize_session(session: PhotoSession, db: Session):
-    """Generate the final composite, save as gallery entry."""
+    """Generate the final composite, save as gallery entry owned by all participants."""
     participants = list(_get_participants(session))  # copy
     if not participants:
         return
@@ -79,6 +86,9 @@ def _finalize_session(session: PhotoSession, db: Session):
     try:
         create_session_composite(image_paths, session.layout, session.frame_type, output_path, settings.UPLOAD_DIR)
         session.composite_filename = composite_filename
+
+        # Composite is owned by every participant's anonymous ID
+        participant_ids = list(_get_participant_ids(session))
 
         # Add composite to gallery (CapturedImage)
         composite_img = CapturedImage(
@@ -92,18 +102,19 @@ def _finalize_session(session: PhotoSession, db: Session):
             height=0,
             file_size=os.path.getsize(output_path),
             layout=session.layout,
+            owner_ids=participant_ids,
             created_at=_utcnow(),
         )
         db.add(composite_img)
         session.status = "complete"
         db.commit()
-        logger.info(f"[Session] Finalized session {session.id}, composite added to gallery")
+        logger.info(f"[Session] Finalized session {session.id}, composite added to gallery for {len(participant_ids)} participant(s)")
     except Exception as e:
         logger.error(f"[Session] Finalize failed for {session.id}: {e}", exc_info=True)
 
 
 @router.post("/create", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
-def create_session(req: CreateSessionRequest, db: Session = Depends(get_db)):
+def create_session(req: CreateSessionRequest, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Create a new shared session and return invite link."""
     max_participants = LAYOUT_SLOTS.get(req.layout, 1)
     if max_participants <= 1:
@@ -115,6 +126,7 @@ def create_session(req: CreateSessionRequest, db: Session = Depends(get_db)):
         max_participants=max_participants,
         frame_type=req.frame_type,
         filter_name=req.filter_name,
+        creator_id=owner_id,
         status="waiting",
         created_at=_utcnow(),
     )
@@ -175,7 +187,7 @@ def _participant_dict_to_info(p: dict) -> ParticipantInfo:
 
 
 @router.post("/{token}/capture", response_model=SessionInfoResponse, status_code=status.HTTP_201_CREATED)
-def capture_to_session(token: str, req: JoinSessionRequest, db: Session = Depends(get_db)):
+def capture_to_session(token: str, req: JoinSessionRequest, db: Session = Depends(get_db), owner_id: Optional[str] = Depends(get_anonymous_id)):
     """Capture a photo and add it to the shared session as the next participant."""
     session = db.query(PhotoSession).filter(PhotoSession.invite_token == token).first()
     if not session:
@@ -210,6 +222,12 @@ def capture_to_session(token: str, req: JoinSessionRequest, db: Session = Depend
         "thumb_filename": result["thumb_filename"],
     })
     session.participants_data = participants
+
+    # Track anonymous IDs of participants so the composite can be scoped to them
+    participant_ids = list(_get_participant_ids(session))
+    participant_ids.append(owner_id)
+    session.participant_ids = participant_ids
+
     db.commit()
     logger.info(f"[Session] Participant {next_slot + 1}/{session.max_participants} added to session {session.id}")
 

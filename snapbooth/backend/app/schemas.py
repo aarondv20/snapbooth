@@ -48,6 +48,7 @@ class ImageResponse(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     file_size: Optional[int] = None
+    owner_ids: Optional[List[str]] = None
     created_at: datetime
 
     class Config:
